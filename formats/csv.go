@@ -2,10 +2,10 @@ package formats
 
 import (
 	"encoding/csv"
-	"fmt"
+	//"fmt"
 	"io"
-	"strconv"
-	"time"
+	//"strconv"
+	//"time"
 )
 
 type CsvFormat struct {
@@ -37,10 +37,13 @@ func (f *CsvFormat) Flush() error { return nil }
 
 func (f *CsvFormat) WriteRow(values map[string]interface{}) error {
 	record := []string{}
-	for _, col := range f.columns {
+	for _, col := range f.columns {		
 		switch value := (values[col]).(type) {
 		case []byte:
 			record = append(record, string(value))
+		default: 
+			record = append(record)
+		/*			
 		case int64:
 			record = append(record, fmt.Sprintf("%d", value))
 		case float64:
@@ -52,8 +55,9 @@ func (f *CsvFormat) WriteRow(values map[string]interface{}) error {
 				record = append(record, "true")
 			} else {
 				record = append(record, "false")
-			}
+			}		*/
 		}
+
 	}
 	err := f.writer.Write(record)
 	if err != nil {
