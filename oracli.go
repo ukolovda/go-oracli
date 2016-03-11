@@ -77,9 +77,15 @@ func main() {
 	app := cli.NewApp()
 	app.Name = "oracli"
 	app.Version = "0.1"
-	app.Usage = "Export data from Oracle into different data formats"
+	app.Usage = "Export data from Oracle into different data formats. Use either DSN or the individual parameters."
 
 	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:   "dsn",
+			Value:  "",
+			Usage:  "username/password@host:port/dbname",
+			EnvVar: "DB_DSN",
+		},
 		cli.StringFlag{
 			Name:   "dbname, d",
 			Value:  "ora",
@@ -94,7 +100,7 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:   "port, p",
-			Value:  "1522",
+			Value:  "1521",
 			Usage:  "port",
 			EnvVar: "DB_PORT",
 		},
@@ -221,7 +227,7 @@ func main() {
 					Value: "data",
 					Usage: "spreadsheet name",
 				},
-			},			
+			},
 			Action: func(c *cli.Context) {
 				format, err := formats.NewXlsxFormat(
 					c.GlobalString("output"),
@@ -229,7 +235,7 @@ func main() {
 				)
 				exitOnError(err)
 				exportFormat(c, format)
-			},		
+			},
 		},
 	}
 

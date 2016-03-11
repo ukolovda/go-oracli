@@ -3,16 +3,14 @@ package ora
 import (
 	"fmt"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/codegangsta/cli"
+	"github.com/jmoiron/sqlx"
 	/*_ "gopkg.in/rana/ora.v3"*/
 	_ "github.com/mattn/go-oci8"
 )
 
 //setup a database connection and create the import schema
-func Connect(connStr string) (*sqlx.DB, error) {	
-	fmt.Printf(connStr)
-	fmt.Printf("\n")
+func Connect(connStr string) (*sqlx.DB, error) {
 	db, err := sqlx.Open("oci8", connStr)
 	if err != nil {
 		fmt.Println(err)
@@ -30,11 +28,15 @@ func Connect(connStr string) (*sqlx.DB, error) {
 
 //parse sql connection string from cli flags
 func ParseConnStr(c *cli.Context) string {
-	return fmt.Sprintf("%s/%s@%s:%s/%s",
-		c.GlobalString("username"),
-		c.GlobalString("pass"),
-		c.GlobalString("host"),
-		c.GlobalString("port"),
-		c.GlobalString("dbname"),
-	)
+	if c.GlobalString("dsn") != "" {
+		return c.GlobalString("dsn")
+	} else {
+		return fmt.Sprintf("%s/%s@%s:%s/%s",
+			c.GlobalString("username"),
+			c.GlobalString("pass"),
+			c.GlobalString("host"),
+			c.GlobalString("port"),
+			c.GlobalString("dbname"),
+		)
+	}
 }
