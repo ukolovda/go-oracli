@@ -1,7 +1,10 @@
 language: go
 
+env:
+  - PKG_CONFIG_PATH=$HOME/gopath/src/github.com/mattn/go-oci8
+
 go:
-  - 1.3
+  - 1.5
   - tip
   
 install:
