@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"./formats"
-	"./ora"
+	"github.com/tapester/go-oracli/formats"
+	"github.com/tapester/go-oracli/ora"
 	"github.com/andrew-d/go-termutil"
 	"github.com/codegangsta/cli"
 )
