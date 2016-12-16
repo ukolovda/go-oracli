@@ -1,12 +1,5 @@
 language: go
 
-env:
-  - PKG_CONFIG_PATH=$HOME/gopath/src/github.com/mattn/go-oci8
-
-go:
-  - 1.5
-  - tip
-  
 install:
   - go get github.com/andrew-d/go-termutil
   - go get github.com/codegangsta/cli
