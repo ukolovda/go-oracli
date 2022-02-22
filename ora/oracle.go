@@ -3,8 +3,8 @@ package ora
 import (
 	"fmt"
 
-	"github.com/codegangsta/cli"
 	"github.com/jmoiron/sqlx"
+	"github.com/urfave/cli"
 	/*_ "gopkg.in/rana/ora.v3"*/
 	_ "github.com/mattn/go-oci8"
 )
