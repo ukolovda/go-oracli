@@ -6,7 +6,7 @@ import (
 	"github.com/codegangsta/cli"
 	"github.com/jmoiron/sqlx"
 	/*_ "gopkg.in/rana/ora.v3"*/
-	_ "github.com/tapester/go-oci8"
+	_ "github.com/mattn/go-oci8"
 )
 
 //setup a database connection and create the import schema

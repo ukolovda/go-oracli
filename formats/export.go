@@ -17,7 +17,7 @@ func Export(query string, connStr string, format DataFormat) error {
 
 	defer db.Close()
 
-	rows, err := db.Queryx(query)	
+	rows, err := db.Queryx(query)
 	if err != nil {
 		return err
 	}
