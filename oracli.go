@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	termutil "github.com/andrew-d/go-termutil"
 	"github.com/ukolovda/go-oracli/formats"
 	"github.com/ukolovda/go-oracli/ora"
 	"github.com/urfave/cli"
