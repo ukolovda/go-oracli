@@ -2,6 +2,7 @@ package ora
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/urfave/cli"
@@ -19,10 +20,10 @@ func Connect(connStr string) (*sqlx.DB, error) {
 
 	err = db.Ping()
 	if err != nil {
-		fmt.Printf("Error connecting to the database: %s\n", err)
+		fmt.Fprintln(os.Stderr, "Error connecting to the database: %s\n", err)
 		return db, nil
 	}
-	fmt.Println("Connection Successful\n")
+	fmt.Fprintln(os.Stderr, "Connection Successful")
 	return db, nil
 }
 
