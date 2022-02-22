@@ -11,8 +11,7 @@ import (
 
 	"github.com/tapester/go-oracli/formats"
 	"github.com/tapester/go-oracli/ora"
-	"github.com/andrew-d/go-termutil"
-	"github.com/codegangsta/cli"
+	"github.com/urfave/cli"
 )
 
 func changeHelpTemplateArgs(args string) {
