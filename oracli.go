@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/tapester/go-oracli/formats"
-	"github.com/tapester/go-oracli/ora"
+	"github.com/ukolovda/go-oracli/formats"
+	"github.com/ukolovda/go-oracli/ora"
 	"github.com/urfave/cli"
 )
 

@@ -1,6 +1,6 @@
 package formats
 
-import "github.com/tapester/go-oracli/ora"
+import "github.com/ukolovda/go-oracli/ora"
 
 // Supports storing data in different formats
 type DataFormat interface {
