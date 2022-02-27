@@ -1,0 +1,4 @@
+Dockerfile
+*.ini
+dumps/*
+output/*

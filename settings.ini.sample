@@ -1,0 +1,5 @@
+﻿[ftp_settings]
+sql=select * from ftp_settings
+id=FTP_ID
+s=S_FTP_SETTINGS
+

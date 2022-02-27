@@ -1,15 +1,24 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"encoding/csv"
 	"errors"
+	"fmt"
+	"github.com/go-ini/ini"
+	"github.com/jmoiron/sqlx"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	termutil "github.com/andrew-d/go-termutil"
+	_ "github.com/mattn/go-oci8"
 	"github.com/ukolovda/go-oracli/formats"
 	"github.com/ukolovda/go-oracli/ora"
 	"github.com/urfave/cli"
@@ -128,9 +137,16 @@ func main() {
 			Usage: "SQL query filename",
 		},
 		cli.StringFlag{
-			Name:  "output, o",
-			Value: "",
-			Usage: "Output filename",
+			Name:   "ini",
+			Value:  "",
+			Usage:  "Export INI filename",
+			EnvVar: "SETTINGS_INI",
+		},
+		cli.StringFlag{
+			Name:   "output, o",
+			Value:  "",
+			Usage:  "Output filename",
+			EnvVar: "OUTPUT_FILE",
 		},
 	}
 
@@ -237,7 +253,232 @@ func main() {
 				exportFormat(c, format)
 			},
 		},
+		{
+			Name:  "psql",
+			Usage: "Export PSQL",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:   "inifile",
+					Value:  "",
+					EnvVar: "INIFILE",
+					Usage:  "Settings Inifile",
+				},
+			},
+			Action: func(c *cli.Context) {
+				iniName := c.String("inifile")
+				cfg, err := ini.Load(iniName)
+				if err != nil {
+					fmt.Printf("Fail to read ini file %q: %v", iniName, err)
+					os.Exit(1)
+				}
+				format := NewPsqlFormat(
+					parseWriter(c),
+				)
+				export2(ora.ParseConnStr(c), format, cfg)
+			},
+		},
 	}
 
 	app.Run(os.Args)
+}
+
+type PsqlFormat struct {
+	rawWriter io.Writer
+	writer    *csv.Writer
+	columns   []string
+}
+
+func NewPsqlFormat(w io.Writer) *PsqlFormat {
+
+	writer := csv.NewWriter(w)
+	writer.Comma = ','
+	return &PsqlFormat{
+		rawWriter: w,
+		writer:    writer,
+		columns:   make([]string, 0),
+	}
+}
+
+func (f *PsqlFormat) WriteHeader(tableName string, columns []string) error {
+	f.columns = columns
+
+	_, err := fmt.Fprintf(f.rawWriter, "-- %s\n", tableName)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f.rawWriter, "copy %s (%s) from stdin;\n", tableName, strings.Join(columns, ","))
+	return err
+}
+
+func (f *PsqlFormat) Flush() error {
+	f.writer.Flush()
+	_, err := fmt.Fprintf(f.rawWriter, "\\.\n\n")
+	return err
+}
+
+func BytesToPgBytea(data []byte) string {
+	return fmt.Sprintf(`\x%X`, data)
+}
+
+func (f *PsqlFormat) WriteRow(rowIndex int64, values map[string]interface{}) error {
+	record := []string{}
+	for _, col := range f.columns {
+		//fmt.Printf("Value: %v\n", values[col])
+		switch value := (values[col]).(type) {
+		case nil:
+			record = append(record, `\N`)
+		case []byte:
+			record = append(record, BytesToPgBytea(value))
+		case int64:
+			record = append(record, fmt.Sprintf("%d", value))
+		case float64:
+			record = append(record, strconv.FormatFloat(value, 'f', -1, 64))
+		case time.Time:
+			record = append(record, value.Format(time.RFC3339))
+		case bool:
+			if value == true {
+				record = append(record, "true")
+			} else {
+				record = append(record, "false")
+			}
+		default:
+			record = append(record, fmt.Sprintf("%v", value))
+		}
+
+	}
+	err := f.writer.Write(record)
+	if err != nil {
+		return err
+	}
+
+	// Сбрасываем буфер каждые 100 записей
+	if rowIndex%100 == 0 {
+		f.writer.Flush()
+		err = f.writer.Error()
+	}
+	return err
+}
+
+func (f *PsqlFormat) AddSequenceFix(sequenceName string, newValue int64) error {
+	_, err := fmt.Fprintf(f.rawWriter, "SELECT setval('%s', %d);\n\n", sequenceName, newValue)
+	//err := format.AddSequenceFix(sequenceName, idResult.MaxId)
+	if err == nil {
+		_, err = fmt.Fprintf(os.Stderr, "Sequence %s switched to %d\n", sequenceName, newValue)
+	}
+	return err
+}
+
+// Supports storing data in different formats
+type DataFormat2 interface {
+	WriteHeader(tableName string, columns []string) error
+	WriteRow(rowIndex int64, values map[string]interface{}) error
+	AddSequenceFix(sequenceName string, newValue int64) error
+	Flush() error
+}
+
+func exportTable(db *sqlx.Tx, format DataFormat2, tableName string, sql string) error {
+
+	startTime := time.Now()
+
+	fmt.Fprintf(os.Stderr, "%s (%s)\n", tableName, sql)
+
+	rows, err := db.Queryx(sql)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	columnNames, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+
+	if err = format.WriteHeader(tableName, columnNames); err != nil {
+		return err
+	}
+
+	var rowIndex int64 = 0
+	for rows.Next() {
+		values := make(map[string]interface{})
+		if err = rows.MapScan(values); err != nil {
+			return err
+		}
+
+		if err = format.WriteRow(rowIndex, values); err != nil {
+			return err
+		}
+
+		// Индикация каждые 10000 записей
+		if rowIndex%10000 == 0 {
+			os.Stderr.Write([]byte("."))
+		}
+
+		rowIndex += 1
+	}
+
+	duration := time.Now().Sub(startTime)
+
+	fmt.Fprintf(os.Stderr, " OK, %d rows, time: %v\n", rowIndex, duration.Seconds())
+
+	if err = format.Flush(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type IdResult struct {
+	MaxId int64 `db:"MAX_ID"`
+}
+
+func export2(connStr string, format DataFormat2, cfg *ini.File) error {
+	db, err := ora.Connect(connStr)
+	if err != nil {
+		return err
+	}
+
+	defer db.Close()
+
+	names := cfg.SectionStrings()
+
+	txOptions := sql.TxOptions{ReadOnly: true}
+	tx := db.MustBeginTx(context.Background(), &txOptions)
+
+	for _, tableName := range names {
+
+		if tableName != "DEFAULT" { // Особое имя, которого на самом деле нет
+			section := cfg.Section(tableName)
+			sql := section.Key("sql").String()
+			if sql == "" {
+				sql = fmt.Sprintf("select * from %s", tableName)
+			}
+
+			err = exportTable(tx, format, tableName, sql)
+			//return rows.Err()
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error export for %q: %v\n", tableName, err)
+				continue
+			}
+			id := section.Key("id").String()
+			sequenceName := section.Key("s").String()
+			if id != "" && sequenceName != "" {
+				sql = fmt.Sprintf("select coalesce(max(%s), 0) max_id from %s", id, tableName)
+				//fmt.Fprintf(os.Stderr, "Sequence check sql: %q\n", sql)
+				// You can also get a single result, a la QueryRow
+				var idResult IdResult
+				err = tx.Get(&idResult, sql)
+				if idResult.MaxId > 0 {
+					err := format.AddSequenceFix(sequenceName, idResult.MaxId)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error export for %q: %v\n", tableName, err)
+					}
+					//} else {
+					//	fmt.Fprintf(os.Stderr, "id is empty\n")
+				}
+			}
+		}
+
+	}
+	return nil
 }

@@ -9,6 +9,7 @@ replace github.com/ukolovda/go-oracli => github.com/ukolovda/go-oracli v0.0.0-20
 replace github.com/codegangsta/cli => github.com/urfave/cli v1.22.2-0.20191024042601-850de854cda0
 
 require (
+	github.com/go-ini/ini v1.66.4
 	github.com/jmoiron/sqlx v1.3.4
 	github.com/mattn/go-oci8 v0.1.1
 	github.com/tealeg/xlsx v1.0.5
@@ -17,5 +18,8 @@ require (
 
 require (
 	github.com/andrew-d/go-termutil v0.0.0-20150726205930-009166a695a2
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/stretchr/testify v1.5.1 // indirect
 	github.com/ukolovda/go-oracli v0.0.0-20161216152736-555b609ceae1
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
