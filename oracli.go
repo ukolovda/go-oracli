@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"github.com/go-ini/ini"
@@ -263,6 +262,16 @@ func main() {
 					EnvVar: "INIFILE",
 					Usage:  "Settings Inifile",
 				},
+				cli.BoolFlag{
+					Name:   "truncate",
+					EnvVar: "DO_TRUNCATE",
+					Usage:  "truncate tables before inserting",
+				},
+				cli.BoolFlag{
+					Name:   "replica-mode",
+					EnvVar: "REPLICA_MODE",
+					Usage:  "set replica mode before loading",
+				},
 			},
 			Action: func(c *cli.Context) {
 				iniName := c.String("inifile")
@@ -273,6 +282,8 @@ func main() {
 				}
 				format := NewPsqlFormat(
 					parseWriter(c),
+					c.Bool("truncate"),
+					c.Bool("replica-mode"),
 				)
 				export2(ora.ParseConnStr(c), format, cfg)
 			},
@@ -283,84 +294,151 @@ func main() {
 }
 
 type PsqlFormat struct {
-	rawWriter io.Writer
-	writer    *csv.Writer
-	columns   []string
+	writer      io.Writer
+	buffer      strings.Builder
+	columns     []string
+	doTruncate  bool
+	replicaMode bool
 }
 
-func NewPsqlFormat(w io.Writer) *PsqlFormat {
+func NewPsqlFormat(w io.Writer, doTruncate bool, replicaMode bool) *PsqlFormat {
 
-	writer := csv.NewWriter(w)
-	writer.Comma = ','
 	return &PsqlFormat{
-		rawWriter: w,
-		writer:    writer,
-		columns:   make([]string, 0),
+		writer:      w,
+		columns:     make([]string, 0),
+		doTruncate:  doTruncate,
+		replicaMode: replicaMode,
 	}
 }
 
-func (f *PsqlFormat) WriteHeader(tableName string, columns []string) error {
-	f.columns = columns
-
-	_, err := fmt.Fprintf(f.rawWriter, "-- %s\n", tableName)
+func (f *PsqlFormat) WriteFileHeader() error {
+	_, err := fmt.Fprint(f.writer, "begin transaction;\n")
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f.rawWriter, "copy %s (%s) from stdin;\n", tableName, strings.Join(columns, ","))
+	if f.replicaMode {
+		_, err = fmt.Fprint(f.writer, "set constraints all deferred;\n")
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprint(f.writer, "set session_replication_role to replica;\n\n")
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *PsqlFormat) WriteTableHeader(tableName string, columns []string) error {
+	f.columns = columns
+
+	_, err := fmt.Fprintf(f.writer, "-- %s\n\n", tableName)
+	if err != nil {
+		return err
+	}
+
+	if f.doTruncate {
+		_, err := fmt.Fprintf(f.writer, "truncate table %s cascade;\n\n", tableName)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(f.writer, "copy %s (%s) from stdin;\n", tableName, strings.Join(columns, ","))
 	return err
 }
 
-func (f *PsqlFormat) Flush() error {
-	f.writer.Flush()
-	_, err := fmt.Fprintf(f.rawWriter, "\\.\n\n")
+func (f *PsqlFormat) FlushTable() error {
+	if f.buffer.Len() > 0 {
+		_, err := f.writer.Write([]byte(f.buffer.String()))
+		if err != nil {
+			return err
+		}
+		f.buffer.Reset()
+	}
+	//f.writer.Flush()
+	_, err := fmt.Fprintf(f.writer, "\\.\n\n")
 	return err
 }
 
-func BytesToPgBytea(data []byte) string {
-	return fmt.Sprintf(`\x%X`, data)
+func (f *PsqlFormat) WriteFileFooter() error {
+	var err error
+	if f.replicaMode {
+		_, err = fmt.Fprint(f.writer, "set session_replication_role to default;\n\n")
+		if err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprint(f.writer, "commit;\n\n")
+	if err != nil {
+		return err
+	}
+	//f.writer.Flush()
+	//return f.writer.Error()
+	return nil
+}
+
+func pgEscapeBytes(data []byte) string {
+	return fmt.Sprintf(`\\x%X`, data)
+}
+
+func pgEscapeString(data string) string {
+	var s = data
+	s = strings.Replace(s, "\\", `\\`, -1)
+	s = strings.Replace(s, "\t", `\t`, -1)
+	s = strings.Replace(s, "\r", `\r`, -1)
+	s = strings.Replace(s, "\n", `\n`, -1)
+	s = strings.Replace(s, "\b", `\b`, -1)
+	s = strings.Replace(s, "\v", `\v`, -1)
+	return s
 }
 
 func (f *PsqlFormat) WriteRow(rowIndex int64, values map[string]interface{}) error {
-	record := []string{}
-	for _, col := range f.columns {
+	//record := []string{}
+	for index, col := range f.columns {
+		if index > 0 {
+			f.buffer.WriteRune('\t')
+		}
 		//fmt.Printf("Value: %v\n", values[col])
 		switch value := (values[col]).(type) {
 		case nil:
-			record = append(record, `\N`)
+			f.buffer.WriteString(`\N`)
 		case []byte:
-			record = append(record, BytesToPgBytea(value))
+			f.buffer.WriteString(pgEscapeBytes(value))
 		case int64:
-			record = append(record, fmt.Sprintf("%d", value))
+			f.buffer.WriteString(fmt.Sprintf("%d", value))
 		case float64:
-			record = append(record, strconv.FormatFloat(value, 'f', -1, 64))
+			f.buffer.WriteString(strconv.FormatFloat(value, 'f', -1, 64))
 		case time.Time:
-			record = append(record, value.Format(time.RFC3339))
+			f.buffer.WriteString(value.Format(time.RFC3339))
 		case bool:
 			if value == true {
-				record = append(record, "true")
+				f.buffer.WriteString("true")
 			} else {
-				record = append(record, "false")
+				f.buffer.WriteString("false")
 			}
 		default:
-			record = append(record, fmt.Sprintf("%v", value))
+			f.buffer.WriteString(pgEscapeString(fmt.Sprintf("%v", value)))
 		}
-
 	}
-	err := f.writer.Write(record)
-	if err != nil {
-		return err
-	}
+	f.buffer.WriteRune('\n')
+	//err := f.writer.Write(record)
+	//if err != nil {
+	//	return err
+	//}
 
 	// Сбрасываем буфер каждые 100 записей
-	if rowIndex%100 == 0 {
-		f.writer.Flush()
-		err = f.writer.Error()
+	if f.buffer.Len() > 0 {
+		_, err := f.writer.Write([]byte(f.buffer.String()))
+		f.buffer.Reset()
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 func (f *PsqlFormat) AddSequenceFix(sequenceName string, newValue int64) error {
-	_, err := fmt.Fprintf(f.rawWriter, "SELECT setval('%s', %d);\n\n", sequenceName, newValue)
+	_, err := fmt.Fprintf(f.writer, "SELECT setval('%s', %d);\n\n", sequenceName, newValue)
 	//err := format.AddSequenceFix(sequenceName, idResult.MaxId)
 	if err == nil {
 		_, err = fmt.Fprintf(os.Stderr, "Sequence %s switched to %d\n", sequenceName, newValue)
@@ -370,10 +448,12 @@ func (f *PsqlFormat) AddSequenceFix(sequenceName string, newValue int64) error {
 
 // Supports storing data in different formats
 type DataFormat2 interface {
-	WriteHeader(tableName string, columns []string) error
+	WriteFileHeader() error
+	WriteTableHeader(tableName string, columns []string) error
 	WriteRow(rowIndex int64, values map[string]interface{}) error
 	AddSequenceFix(sequenceName string, newValue int64) error
-	Flush() error
+	FlushTable() error
+	WriteFileFooter() error
 }
 
 func exportTable(db *sqlx.Tx, format DataFormat2, tableName string, sql string) error {
@@ -393,7 +473,7 @@ func exportTable(db *sqlx.Tx, format DataFormat2, tableName string, sql string) 
 		return err
 	}
 
-	if err = format.WriteHeader(tableName, columnNames); err != nil {
+	if err = format.WriteTableHeader(tableName, columnNames); err != nil {
 		return err
 	}
 
@@ -420,7 +500,7 @@ func exportTable(db *sqlx.Tx, format DataFormat2, tableName string, sql string) 
 
 	fmt.Fprintf(os.Stderr, " OK, %d rows, time: %v\n", rowIndex, duration.Seconds())
 
-	if err = format.Flush(); err != nil {
+	if err = format.FlushTable(); err != nil {
 		return err
 	}
 
@@ -444,16 +524,20 @@ func export2(connStr string, format DataFormat2, cfg *ini.File) error {
 	txOptions := sql.TxOptions{ReadOnly: true}
 	tx := db.MustBeginTx(context.Background(), &txOptions)
 
+	if err := format.WriteFileHeader(); err != nil {
+		return err
+	}
+
 	for _, tableName := range names {
 
 		if tableName != "DEFAULT" { // Особое имя, которого на самом деле нет
 			section := cfg.Section(tableName)
-			sql := section.Key("sql").String()
-			if sql == "" {
-				sql = fmt.Sprintf("select * from %s", tableName)
+			sqlText := section.Key("sql").String()
+			if sqlText == "" {
+				sqlText = fmt.Sprintf("select * from %s", tableName)
 			}
 
-			err = exportTable(tx, format, tableName, sql)
+			err = exportTable(tx, format, tableName, sqlText)
 			//return rows.Err()
 
 			if err != nil {
@@ -463,11 +547,11 @@ func export2(connStr string, format DataFormat2, cfg *ini.File) error {
 			id := section.Key("id").String()
 			sequenceName := section.Key("s").String()
 			if id != "" && sequenceName != "" {
-				sql = fmt.Sprintf("select coalesce(max(%s), 0) max_id from %s", id, tableName)
+				sqlText = fmt.Sprintf("select coalesce(max(%s), 0) max_id from %s", id, tableName)
 				//fmt.Fprintf(os.Stderr, "Sequence check sql: %q\n", sql)
 				// You can also get a single result, a la QueryRow
 				var idResult IdResult
-				err = tx.Get(&idResult, sql)
+				err = tx.Get(&idResult, sqlText)
 				if idResult.MaxId > 0 {
 					err := format.AddSequenceFix(sequenceName, idResult.MaxId)
 					if err != nil {
@@ -480,5 +564,6 @@ func export2(connStr string, format DataFormat2, cfg *ini.File) error {
 		}
 
 	}
-	return nil
+	err = format.WriteFileFooter()
+	return err
 }
